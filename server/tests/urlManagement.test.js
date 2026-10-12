@@ -1,11 +1,14 @@
-process.env.ENABLE_URL_MANAGEMENT = "true";
+require("./helpers/auth");
 process.env.NODE_ENV = "test";
 
 const { describe, it, before, after } = require("node:test");
 const assert = require("node:assert/strict");
 const app = require("../app");
 const Url = require("../models/Url");
+const User = require("../models/User");
+const { signTestToken, stubFindUserById } = require("./helpers/auth");
 
+const ownerId = "64b0f0c0c0c0c0c0c0c0c0c1";
 const sample = {
     shortCode: "abc12xy",
     originalUrl: "https://youtube.com/watch?v=123",
@@ -14,7 +17,8 @@ const sample = {
     isActive: true,
     expiresAt: new Date("2026-10-19T00:00:00.000Z"),
     createdAt: new Date("2026-10-12T00:00:00.000Z"),
-    updatedAt: new Date("2026-10-12T00:00:00.000Z")
+    updatedAt: new Date("2026-10-12T00:00:00.000Z"),
+    userId: ownerId
 };
 
 describe("URL management HTTP", () => {
@@ -25,6 +29,8 @@ describe("URL management HTTP", () => {
     let originalCountDocuments;
     let originalFindOneAndUpdate;
     let originalFindOneAndDelete;
+    let originalFindById;
+    const token = signTestToken(ownerId);
 
     before(async () => {
         originalFindOne = Url.findOne;
@@ -32,6 +38,12 @@ describe("URL management HTTP", () => {
         originalCountDocuments = Url.countDocuments;
         originalFindOneAndUpdate = Url.findOneAndUpdate;
         originalFindOneAndDelete = Url.findOneAndDelete;
+        originalFindById = User.findById;
+        stubFindUserById(User, {
+            _id: ownerId,
+            name: "Owner",
+            email: "owner@example.com"
+        });
 
         await new Promise((resolve) => {
             server = app.listen(0, "127.0.0.1", () => {
@@ -48,6 +60,7 @@ describe("URL management HTTP", () => {
         Url.countDocuments = originalCountDocuments;
         Url.findOneAndUpdate = originalFindOneAndUpdate;
         Url.findOneAndDelete = originalFindOneAndDelete;
+        User.findById = originalFindById;
 
         await new Promise((resolve, reject) => {
             server.close((error) => {
@@ -61,12 +74,20 @@ describe("URL management HTTP", () => {
         });
     });
 
-    const requestJson = async (method, path, body) => {
+    const requestJson = async (method, path, body, authToken = token) => {
+        const headers = {};
+
+        if (body !== undefined) {
+            headers["Content-Type"] = "application/json";
+        }
+
+        if (authToken) {
+            headers.Authorization = `Bearer ${authToken}`;
+        }
+
         const response = await fetch(`${baseUrl}${path}`, {
             method,
-            headers: body === undefined
-                ? {}
-                : { "Content-Type": "application/json" },
+            headers,
             body: body === undefined ? undefined : JSON.stringify(body),
             redirect: "manual"
         });
@@ -86,8 +107,14 @@ describe("URL management HTTP", () => {
     };
 
     const stubFindOne = (document) => {
-        Url.findOne = () => ({
-            lean: async () => document
+        Url.findOne = (filter) => ({
+            lean: async () => {
+                if (filter.userId && filter.userId !== ownerId) {
+                    return null;
+                }
+
+                return document;
+            }
         });
     };
 
@@ -112,7 +139,8 @@ describe("URL management HTTP", () => {
     });
 
     it("lists URLs with default pagination", async () => {
-        Url.find = () => {
+        Url.find = (filter) => {
+            assert.equal(filter.userId, ownerId);
             const query = {
                 sort() { return query; },
                 skip() { return query; },
@@ -121,7 +149,10 @@ describe("URL management HTTP", () => {
             };
             return query;
         };
-        Url.countDocuments = async () => 1;
+        Url.countDocuments = async (filter) => {
+            assert.equal(filter.userId, ownerId);
+            return 1;
+        };
 
         const result = await requestJson("GET", "/api/urls");
 
@@ -161,11 +192,15 @@ describe("URL management HTTP", () => {
 
     it("updates originalUrl and recalculates domain", async () => {
         stubFindOne(sample);
-        Url.findOneAndUpdate = async (filter, update) => ({
-            ...sample,
-            originalUrl: update.$set.originalUrl,
-            domain: update.$set.domain
-        });
+        Url.findOneAndUpdate = async (filter, update) => {
+            assert.equal(filter.userId, ownerId);
+            assert.equal(update.$set.userId, undefined);
+            return {
+                ...sample,
+                originalUrl: update.$set.originalUrl,
+                domain: update.$set.domain
+            };
+        };
 
         const result = await requestJson("PATCH", "/api/urls/abc12xy", {
             url: "https://example.com/new"
@@ -177,10 +212,13 @@ describe("URL management HTTP", () => {
     });
 
     it("deactivates a URL and later redirects are rejected", async () => {
-        Url.findOneAndUpdate = async () => ({
-            ...sample,
-            isActive: false
-        });
+        Url.findOneAndUpdate = async (filter) => {
+            assert.equal(filter.userId, ownerId);
+            return {
+                ...sample,
+                isActive: false
+            };
+        };
 
         const deactivated = await requestJson("PATCH", "/api/urls/abc12xy/deactivate");
 
@@ -192,7 +230,7 @@ describe("URL management HTTP", () => {
             isActive: false
         });
 
-        const redirect = await requestJson("GET", "/abc12xy");
+        const redirect = await requestJson("GET", "/abc12xy", undefined, null);
 
         assert.equal(redirect.status, 403);
         assert.match(redirect.json.error, /inactive/i);
@@ -207,7 +245,10 @@ describe("URL management HTTP", () => {
     });
 
     it("deletes an existing URL", async () => {
-        Url.findOneAndDelete = async () => sample;
+        Url.findOneAndDelete = async (filter) => {
+            assert.equal(filter.userId, ownerId);
+            return sample;
+        };
 
         const result = await requestJson("DELETE", "/api/urls/abc12xy");
 
@@ -223,8 +264,15 @@ describe("URL management HTTP", () => {
         assert.equal(result.status, 404);
     });
 
+    it("rejects management requests without a Bearer token", async () => {
+        const result = await requestJson("GET", "/api/urls", undefined, null);
+
+        assert.equal(result.status, 401);
+        assert.match(result.json.error, /authentication required/i);
+    });
+
     it("returns JSON 404 for unknown API routes", async () => {
-        const result = await requestJson("POST", "/api/unknown");
+        const result = await requestJson("POST", "/api/unknown", undefined, null);
 
         assert.equal(result.status, 404);
         assert.equal(result.json.error, "Route not found.");

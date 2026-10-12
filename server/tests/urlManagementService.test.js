@@ -8,6 +8,7 @@ const {
     deleteUrl
 } = require("../services/urlManagementService");
 
+const ownerId = "user-a";
 const sample = {
     shortCode: "abc12xy",
     originalUrl: "https://youtube.com/watch?v=123",
@@ -17,14 +18,19 @@ const sample = {
     expiresAt: new Date("2026-10-19T00:00:00.000Z"),
     createdAt: new Date("2026-10-12T00:00:00.000Z"),
     updatedAt: new Date("2026-10-12T00:00:00.000Z"),
+    userId: ownerId,
     _id: "internal-id",
     __v: 0
 };
 
 describe("getUrlByShortCode", () => {
     it("returns public metadata for an existing URL", async () => {
-        const result = await getUrlByShortCode("abc12xy", {
-            findUrl: async () => sample
+        const result = await getUrlByShortCode("abc12xy", ownerId, {
+            findUrl: async (shortCode, userId) => {
+                assert.equal(shortCode, "abc12xy");
+                assert.equal(userId, ownerId);
+                return sample;
+            }
         });
 
         assert.equal(result.shortCode, "abc12xy");
@@ -32,16 +38,24 @@ describe("getUrlByShortCode", () => {
         assert.equal(result.clicks, 4);
         assert.equal(result._id, undefined);
         assert.equal(result.__v, undefined);
+        assert.equal(result.userId, undefined);
     });
 
     it("returns 404 when the URL does not exist", async () => {
         await assert.rejects(
-            () => getUrlByShortCode("missing", { findUrl: async () => null }),
+            () => getUrlByShortCode("missing", ownerId, { findUrl: async () => null }),
             (error) => {
                 assert.equal(error.statusCode, 404);
                 assert.match(error.message, /not found/i);
                 return true;
             }
+        );
+    });
+
+    it("returns 404 for a URL owned by another user or a legacy unowned URL", async () => {
+        await assert.rejects(
+            () => getUrlByShortCode("abc12xy", ownerId, { findUrl: async () => null }),
+            (error) => error.statusCode === 404
         );
     });
 });
@@ -54,15 +68,19 @@ describe("listUrls", () => {
         ];
 
         const result = await listUrls(
-            { page: 1, limit: 10 },
+            { page: 1, limit: 10, userId: ownerId },
             {
-                findPage: async ({ skip, limit, sort }) => {
+                findPage: async ({ skip, limit, sort, userId }) => {
                     assert.equal(skip, 0);
                     assert.equal(limit, 10);
+                    assert.equal(userId, ownerId);
                     assert.deepEqual(sort, { createdAt: -1, shortCode: 1 });
                     return docs;
                 },
-                countUrls: async () => 2
+                countUrls: async (userId) => {
+                    assert.equal(userId, ownerId);
+                    return 2;
+                }
             }
         );
 
@@ -78,11 +96,12 @@ describe("listUrls", () => {
 
     it("computes skip from the requested page", async () => {
         await listUrls(
-            { page: 3, limit: 10 },
+            { page: 3, limit: 10, userId: ownerId },
             {
-                findPage: async ({ skip, limit }) => {
+                findPage: async ({ skip, limit, userId }) => {
                     assert.equal(skip, 20);
                     assert.equal(limit, 10);
+                    assert.equal(userId, ownerId);
                     return [];
                 },
                 countUrls: async () => 25
@@ -97,15 +116,21 @@ describe("updateUrl", () => {
     it("recalculates domain when originalUrl changes", async () => {
         const result = await updateUrl(
             "abc12xy",
+            ownerId,
             { url: "https://example.com/new" },
             {
                 now,
-                findUrl: async () => sample,
-                saveUpdate: async (shortCode, update) => {
+                findUrl: async (shortCode, userId) => {
+                    assert.equal(userId, ownerId);
+                    return sample;
+                },
+                saveUpdate: async (shortCode, userId, update) => {
                     assert.equal(shortCode, "abc12xy");
+                    assert.equal(userId, ownerId);
                     assert.equal(update.originalUrl, "https://example.com/new");
                     assert.equal(update.domain, "example.com");
                     assert.equal(update.clicks, undefined);
+                    assert.equal(update.userId, undefined);
                     return {
                         ...sample,
                         originalUrl: update.originalUrl,
@@ -125,6 +150,7 @@ describe("updateUrl", () => {
         await assert.rejects(
             () => updateUrl(
                 "abc12xy",
+                ownerId,
                 { expiresIn: "7d" },
                 {
                     now,
@@ -148,7 +174,7 @@ describe("updateUrl", () => {
 
     it("returns 404 when updating a missing URL", async () => {
         await assert.rejects(
-            () => updateUrl("missing", { url: "https://example.com" }, {
+            () => updateUrl("missing", ownerId, { url: "https://example.com" }, {
                 now,
                 findUrl: async () => null,
                 saveUpdate: async () => {}
@@ -160,9 +186,10 @@ describe("updateUrl", () => {
 
 describe("deactivateUrl", () => {
     it("sets isActive to false without deleting the URL", async () => {
-        const result = await deactivateUrl("abc12xy", {
-            saveDeactivate: async (shortCode) => {
+        const result = await deactivateUrl("abc12xy", ownerId, {
+            saveDeactivate: async (shortCode, userId) => {
                 assert.equal(shortCode, "abc12xy");
+                assert.equal(userId, ownerId);
                 return {
                     ...sample,
                     isActive: false
@@ -175,7 +202,7 @@ describe("deactivateUrl", () => {
     });
 
     it("is safe to deactivate an already inactive URL", async () => {
-        const result = await deactivateUrl("abc12xy", {
+        const result = await deactivateUrl("abc12xy", ownerId, {
             saveDeactivate: async () => ({
                 ...sample,
                 isActive: false
@@ -187,7 +214,7 @@ describe("deactivateUrl", () => {
 
     it("returns 404 when deactivating a missing URL", async () => {
         await assert.rejects(
-            () => deactivateUrl("missing", {
+            () => deactivateUrl("missing", ownerId, {
                 saveDeactivate: async () => null
             }),
             (error) => error.statusCode === 404
@@ -197,9 +224,10 @@ describe("deactivateUrl", () => {
 
 describe("deleteUrl", () => {
     it("deletes an existing URL", async () => {
-        const result = await deleteUrl("abc12xy", {
-            removeUrl: async (shortCode) => {
+        const result = await deleteUrl("abc12xy", ownerId, {
+            removeUrl: async (shortCode, userId) => {
                 assert.equal(shortCode, "abc12xy");
+                assert.equal(userId, ownerId);
                 return sample;
             }
         });
@@ -209,7 +237,7 @@ describe("deleteUrl", () => {
 
     it("returns 404 when deleting a missing URL", async () => {
         await assert.rejects(
-            () => deleteUrl("missing", { removeUrl: async () => null }),
+            () => deleteUrl("missing", ownerId, { removeUrl: async () => null }),
             (error) => error.statusCode === 404
         );
     });

@@ -1,7 +1,7 @@
 const express = require("express");
 const urlRoutes = require("./routes/urlRoutes");
 const urlManagementRoutes = require("./routes/urlManagementRoutes");
-const { allowUrlManagement } = require("./middleware/allowUrlManagement");
+const authRoutes = require("./routes/authRoutes");
 const { errorHandler, notFoundHandler } = require("./middleware/errorHandler");
 
 const app = express();
@@ -12,7 +12,8 @@ app.get("/", (req, res) => {
     res.send("Hello");
 });
 
-app.use("/api/urls", allowUrlManagement, urlManagementRoutes);
+app.use("/api/auth", authRoutes);
+app.use("/api/urls", urlManagementRoutes);
 app.use("/", urlRoutes);
 
 app.use(notFoundHandler);

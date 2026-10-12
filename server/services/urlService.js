@@ -28,12 +28,18 @@ const createShortUrl = async ({ url, expiresIn }, options = {}) => {
         const shortCode = await generateCode();
 
         try {
-            return await saveUrl({
+            const document = {
                 originalUrl: url,
                 shortCode,
                 domain,
                 expiresAt
-            });
+            };
+
+            if (options.userId) {
+                document.userId = options.userId;
+            }
+
+            return await saveUrl(document);
         } catch (error) {
             if (!isDuplicateKeyError(error)) {
                 throw error;

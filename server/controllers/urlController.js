@@ -13,7 +13,9 @@ const createShortUrlHandler = async (req, res) => {
     }
 
     try {
-        const created = await createShortUrl(req.body);
+        const created = await createShortUrl(req.body, {
+            userId: req.user?.id || null
+        });
 
         return res.status(CREATED).json({
             shortUrl: buildPublicShortUrl(created.shortCode),

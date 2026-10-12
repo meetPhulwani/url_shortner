@@ -6,8 +6,11 @@ const {
     deactivateUrl,
     deleteUrl
 } = require("../controllers/urlManagementController");
+const { authenticate } = require("../middleware/authenticate");
 
 const router = express.Router();
+
+router.use(authenticate);
 
 router.get("/", listUrls);
 router.get("/:shortCode", getUrl);

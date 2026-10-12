@@ -9,7 +9,7 @@ const {
 const { validatePaginationQuery, validateUrlUpdate } = require("../validators/urlValidator");
 
 const getUrl = async (req, res) => {
-    const url = await getUrlByShortCode(req.params.shortCode);
+    const url = await getUrlByShortCode(req.params.shortCode, req.user.id);
     return res.status(OK).json(url);
 };
 
@@ -22,7 +22,10 @@ const listUrlsHandler = async (req, res) => {
         });
     }
 
-    const result = await listUrls(pagination);
+    const result = await listUrls({
+        ...pagination,
+        userId: req.user.id
+    });
     return res.status(OK).json(result);
 };
 
@@ -35,17 +38,17 @@ const updateUrlHandler = async (req, res) => {
         });
     }
 
-    const url = await updateUrl(req.params.shortCode, changes);
+    const url = await updateUrl(req.params.shortCode, req.user.id, changes);
     return res.status(OK).json(url);
 };
 
 const deactivateUrlHandler = async (req, res) => {
-    const url = await deactivateUrl(req.params.shortCode);
+    const url = await deactivateUrl(req.params.shortCode, req.user.id);
     return res.status(OK).json(url);
 };
 
 const deleteUrlHandler = async (req, res) => {
-    await deleteUrl(req.params.shortCode);
+    await deleteUrl(req.params.shortCode, req.user.id);
     return res.status(OK).json({
         message: "Short URL deleted."
     });

@@ -25,12 +25,19 @@ const urlSchema = new mongoose.Schema({
     isActive: {
         type: Boolean,
         default: true
+    },
+    userId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        default: null
     }
     },
     {
     timestamps: true
     }
 );
+
+urlSchema.index({ userId: 1, createdAt: -1 });
 
 const url = mongoose.model("URLS",urlSchema);
 

@@ -37,6 +37,29 @@ describe("createShortUrl", () => {
         });
         assert.equal(result.shortCode, "abc12xy");
         assert.equal(result.domain, "youtube.com");
+        assert.equal(saved[0].userId, undefined);
+    });
+
+    it("stores userId only when the creator is authenticated", async () => {
+        const saved = [];
+
+        await createShortUrl(
+            {
+                url: "https://example.com",
+                expiresIn: "1h"
+            },
+            {
+                now: new Date("2026-10-12T00:00:00.000Z"),
+                userId: "user-a",
+                generateShortCode: async () => "own3d01",
+                saveUrl: async (doc) => {
+                    saved.push(doc);
+                    return doc;
+                }
+            }
+        );
+
+        assert.equal(saved[0].userId, "user-a");
     });
 
     it("retries when the generated short code already exists", async () => {
